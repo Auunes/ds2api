@@ -5,6 +5,7 @@ from fastapi import HTTPException, Request
 
 from .config import CONFIG, logger
 from .deepseek import login_deepseek_via_account, BASE_HEADERS
+from .utils import get_account_identifier
 
 # -------------------------- 全局账号队列 --------------------------
 # 使用列表实现轮询队列，配合线程锁保证并发安全
@@ -37,12 +38,7 @@ init_account_queue()
 init_claude_api_key_queue()
 
 
-# ----------------------------------------------------------------------
-# 辅助函数：获取账号唯一标识（优先 email，否则 mobile）
-# ----------------------------------------------------------------------
-def get_account_identifier(account: dict) -> str:
-    """返回账号的唯一标识，优先使用 email，否则使用 mobile"""
-    return account.get("email", "").strip() or account.get("mobile", "").strip()
+# get_account_identifier 已移至 core.utils
 
 
 def get_queue_status() -> dict:
@@ -176,12 +172,7 @@ def get_auth_headers(request: Request) -> dict:
     return {**BASE_HEADERS, "authorization": f"Bearer {request.state.deepseek_token}"}
 
 
-# ----------------------------------------------------------------------
-# Claude 认证相关函数
-# ----------------------------------------------------------------------
-def determine_claude_mode_and_token(request: Request):
-    """Claude认证：沿用现有的OpenAI接口认证逻辑"""
-    determine_mode_and_token(request)
+# determine_claude_mode_and_token 已移除（直接使用 determine_mode_and_token）
 
 
 # ----------------------------------------------------------------------

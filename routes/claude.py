@@ -2,7 +2,6 @@
 """Claude API 路由"""
 import json
 import random
-import re
 import time
 
 from curl_cffi import requests as cffi_requests
@@ -11,16 +10,23 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.config import CONFIG, logger
 from core.auth import (
-    determine_claude_mode_and_token,
+    determine_mode_and_token,
     get_auth_headers,
 )
 from core.deepseek import call_completion_endpoint
 from core.session_manager import (
     create_session,
     get_pow,
-    get_model_config,
     cleanup_account,
 )
+from core.models import get_model_config, get_claude_models_response
+from core.stream_parser import (
+    parse_deepseek_sse_line,
+    extract_content_from_chunk,
+    collect_deepseek_response,
+    parse_tool_calls,
+)
+from core.utils import estimate_tokens
 from core.messages import (
     messages_prepare,
     convert_claude_to_deepseek,
@@ -28,9 +34,6 @@ from core.messages import (
 )
 
 router = APIRouter()
-
-# 预编译正则表达式（性能优化）
-_TOOL_CALL_PATTERN = re.compile(r'\{\s*["\']tool_calls["\']\s*:\s*\[(.*?)\]\s*\}', re.DOTALL)
 
 
 # ----------------------------------------------------------------------
@@ -87,27 +90,7 @@ async def call_claude_via_openai(request: Request, claude_payload: dict):
 # ----------------------------------------------------------------------
 @router.get("/anthropic/v1/models")
 def list_claude_models():
-    models_list = [
-        {
-            "id": "claude-sonnet-4-20250514",
-            "object": "model",
-            "created": 1715635200,
-            "owned_by": "anthropic",
-        },
-        {
-            "id": "claude-sonnet-4-20250514-fast",
-            "object": "model",
-            "created": 1715635200,
-            "owned_by": "anthropic",
-        },
-        {
-            "id": "claude-sonnet-4-20250514-slow",
-            "object": "model",
-            "created": 1715635200,
-            "owned_by": "anthropic",
-        },
-    ]
-    data = {"object": "list", "data": models_list}
+    data = get_claude_models_response()
     return JSONResponse(content=data, status_code=200)
 
 
@@ -118,13 +101,13 @@ def list_claude_models():
 async def claude_messages(request: Request):
     try:
         try:
-            determine_claude_mode_and_token(request)
+            determine_mode_and_token(request)
         except HTTPException as exc:
             return JSONResponse(
                 status_code=exc.status_code, content={"error": exc.detail}
             )
         except Exception as exc:
-            logger.error(f"[claude_messages] determine_claude_mode_and_token 异常: {exc}")
+            logger.error(f"[claude_messages] determine_mode_and_token 异常: {exc}")
             return JSONResponse(
                 status_code=500, content={"error": "Claude authentication failed."}
             )
@@ -290,34 +273,8 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                     yield f"data: {json.dumps(message_start)}\n\n"
 
                     # 检查工具调用
-                    detected_tools = []
-                    cleaned_response = full_response_text.strip()
-
-                    if cleaned_response.startswith('{"tool_calls":') and cleaned_response.endswith("]}"):
-                        try:
-                            tool_data = json.loads(cleaned_response)
-                            for tool_call in tool_data.get("tool_calls", []):
-                                tool_name = tool_call.get("name")
-                                tool_input = tool_call.get("input", {})
-                                if any(tool.get("name") == tool_name for tool in tools_requested):
-                                    detected_tools.append({"name": tool_name, "input": tool_input})
-                        except json.JSONDecodeError:
-                            pass
-
-                    if not detected_tools:
-                        # 使用预编译的正则表达式
-                        matches = _TOOL_CALL_PATTERN.findall(cleaned_response)
-                        for match in matches:
-                            try:
-                                tool_calls_json = f'{{"tool_calls": [{match}]}}'
-                                tool_data = json.loads(tool_calls_json)
-                                for tool_call in tool_data.get("tool_calls", []):
-                                    tool_name = tool_call.get("name")
-                                    tool_input = tool_call.get("input", {})
-                                    if any(tool.get("name") == tool_name for tool in tools_requested):
-                                        detected_tools.append({"name": tool_name, "input": tool_input})
-                            except json.JSONDecodeError:
-                                continue
+                    # 使用公共函数检测工具调用
+                    detected_tools = parse_tool_calls(full_response_text, tools_requested)
 
                     content_index = 0
                     if detected_tools:
@@ -415,34 +372,7 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                     logger.warning(f"[claude_messages] 关闭响应异常: {e}")
 
                 # 检查工具调用
-                detected_tools = []
-                cleaned_content = final_content.strip()
-
-                if cleaned_content.startswith('{"tool_calls":') and cleaned_content.endswith("]}"):
-                    try:
-                        tool_data = json.loads(cleaned_content)
-                        for tool_call in tool_data.get("tool_calls", []):
-                            tool_name = tool_call.get("name")
-                            tool_input = tool_call.get("input", {})
-                            if any(tool.get("name") == tool_name for tool in tools_requested):
-                                detected_tools.append({"name": tool_name, "input": tool_input})
-                    except json.JSONDecodeError:
-                        pass
-
-                if not detected_tools:
-                    # 使用预编译的正则表达式
-                    matches = _TOOL_CALL_PATTERN.findall(cleaned_content)
-                    for match in matches:
-                        try:
-                            tool_calls_json = f'{{"tool_calls": [{match}]}}'
-                            tool_data = json.loads(tool_calls_json)
-                            for tool_call in tool_data.get("tool_calls", []):
-                                tool_name = tool_call.get("name")
-                                tool_input = tool_call.get("input", {})
-                                if any(tool.get("name") == tool_name for tool in tools_requested):
-                                    detected_tools.append({"name": tool_name, "input": tool_input})
-                        except json.JSONDecodeError:
-                            continue
+                detected_tools = parse_tool_calls(final_content, tools_requested)
 
                 # 构造响应
                 claude_response = {
@@ -513,11 +443,11 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
 async def claude_count_tokens(request: Request):
     try:
         try:
-            determine_claude_mode_and_token(request)
+            determine_mode_and_token(request)
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
         except Exception as exc:
-            logger.error(f"[claude_count_tokens] determine_claude_mode_and_token 异常: {exc}")
+            logger.error(f"[claude_count_tokens] determine_mode_and_token 异常: {exc}")
             return JSONResponse(status_code=500, content={"error": "Claude authentication failed."})
 
         req_data = await request.json()
@@ -529,19 +459,6 @@ async def claude_count_tokens(request: Request):
             raise HTTPException(
                 status_code=400, detail="Request must include 'model' and 'messages'."
             )
-
-        def estimate_tokens(text):
-            if isinstance(text, str):
-                return len(text) // 4
-            elif isinstance(text, list):
-                return sum(
-                    estimate_tokens(item.get("text", ""))
-                    if isinstance(item, dict)
-                    else estimate_tokens(str(item))
-                    for item in text
-                )
-            else:
-                return len(str(text)) // 4
 
         input_tokens = 0
 

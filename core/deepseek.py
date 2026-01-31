@@ -5,6 +5,7 @@ from curl_cffi import requests
 from fastapi import HTTPException
 
 from .config import CONFIG, save_config, logger
+from .utils import get_account_identifier
 
 # ----------------------------------------------------------------------
 # DeepSeek 相关常量
@@ -28,9 +29,7 @@ BASE_HEADERS = {
 }
 
 
-def get_account_identifier(account: dict) -> str:
-    """返回账号的唯一标识，优先使用 email，否则使用 mobile"""
-    return account.get("email", "").strip() or account.get("mobile", "").strip()
+# get_account_identifier 已移至 core.utils
 
 
 # ----------------------------------------------------------------------

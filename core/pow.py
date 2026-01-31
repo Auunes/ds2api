@@ -11,6 +11,7 @@ from curl_cffi import requests
 from wasmtime import Engine, Linker, Module, Store
 
 from .config import CONFIG, WASM_PATH, logger
+from .utils import get_account_identifier
 
 # ----------------------------------------------------------------------
 # WASM 模块缓存 - 避免每次请求都重新加载
@@ -51,10 +52,7 @@ try:
 except Exception as e:
     logger.warning(f"[WASM] 启动时预加载失败（将在首次使用时重试）: {e}")
 
-
-def get_account_identifier(account: dict) -> str:
-    """返回账号的唯一标识"""
-    return account.get("email", "").strip() or account.get("mobile", "").strip()
+# get_account_identifier 已移至 core.utils
 
 
 # ----------------------------------------------------------------------
@@ -152,17 +150,24 @@ def compute_pow_answer(
     return int(value)
 
 
-# ----------------------------------------------------------------------
-# 获取 PoW 响应，融合计算 answer 逻辑
-# ----------------------------------------------------------------------
-def get_pow_response(request, get_auth_headers_func, choose_new_account_func, 
-                     login_func, pow_url: str, max_attempts: int = 3):
-    """获取 PoW 响应"""
-    from .deepseek import BASE_HEADERS
+def get_pow_response(request, max_attempts: int = 3):
+    """获取 PoW 响应
+    
+    Args:
+        request: FastAPI 请求对象
+        max_attempts: 最大重试次数
+        
+    Returns:
+        Base64 编码的 PoW 响应，如果失败返回 None
+    """
+    from .auth import get_auth_headers, choose_new_account
+    from .deepseek import BASE_HEADERS, login_deepseek_via_account, DEEPSEEK_CREATE_POW_URL
+    
+    pow_url = DEEPSEEK_CREATE_POW_URL
     
     attempts = 0
     while attempts < max_attempts:
-        headers = get_auth_headers_func(request)
+        headers = get_auth_headers(request)
         try:
             resp = requests.post(
                 pow_url,
@@ -227,11 +232,11 @@ def get_pow_response(request, get_auth_headers_func, choose_new_account_func,
                     request.state.tried_accounts = []
                 if current_id not in request.state.tried_accounts:
                     request.state.tried_accounts.append(current_id)
-                new_account = choose_new_account_func(request.state.tried_accounts)
+                new_account = choose_new_account(request.state.tried_accounts)
                 if new_account is None:
                     break
                 try:
-                    login_func(new_account)
+                    login_deepseek_via_account(new_account)
                 except Exception as e:
                     logger.error(
                         f"[get_pow_response] 账号 {get_account_identifier(new_account)} 登录失败：{e}"
@@ -245,3 +250,4 @@ def get_pow_response(request, get_auth_headers_func, choose_new_account_func,
                 continue
             attempts += 1
     return None
+

@@ -158,7 +158,7 @@ class TestPow(unittest.TestCase):
 
     def test_get_account_identifier(self):
         """测试账号标识获取"""
-        from core.pow import get_account_identifier
+        from core.utils import get_account_identifier
         
         # 测试邮箱
         account1 = {"email": "test@example.com"}

@@ -20,8 +20,13 @@ from core.deepseek import call_completion_endpoint
 from core.session_manager import (
     create_session,
     get_pow,
-    get_model_config,
     cleanup_account,
+)
+from core.models import get_model_config, get_openai_models_response
+from core.stream_parser import (
+    parse_deepseek_sse_line,
+    extract_content_from_chunk,
+    should_filter_citation,
 )
 from core.messages import messages_prepare
 
@@ -39,37 +44,7 @@ _CITATION_PATTERN = re.compile(r"^\[citation:")
 # ----------------------------------------------------------------------
 @router.get("/v1/models")
 def list_models():
-    models_list = [
-        {
-            "id": "deepseek-chat",
-            "object": "model",
-            "created": 1677610602,
-            "owned_by": "deepseek",
-            "permission": [],
-        },
-        {
-            "id": "deepseek-reasoner",
-            "object": "model",
-            "created": 1677610602,
-            "owned_by": "deepseek",
-            "permission": [],
-        },
-        {
-            "id": "deepseek-chat-search",
-            "object": "model",
-            "created": 1677610602,
-            "owned_by": "deepseek",
-            "permission": [],
-        },
-        {
-            "id": "deepseek-reasoner-search",
-            "object": "model",
-            "created": 1677610602,
-            "owned_by": "deepseek",
-            "permission": [],
-        },
-    ]
-    data = {"object": "list", "data": models_list}
+    data = get_openai_models_response()
     return JSONResponse(content=data, status_code=200)
 
 

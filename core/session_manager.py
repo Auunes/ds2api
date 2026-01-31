@@ -4,10 +4,11 @@ from curl_cffi import requests as cffi_requests
 from fastapi import HTTPException, Request
 
 from .config import logger
+from .utils import get_account_identifier
+from .models import get_model_config
 from .auth import (
     get_auth_headers,
     choose_new_account,
-    get_account_identifier,
     release_account,
     refresh_account_token,
 )
@@ -114,14 +115,7 @@ def get_pow(request: Request, max_attempts: int = 3) -> str | None:
     Returns:
         Base64 编码的 PoW 响应，如果失败返回 None
     """
-    return get_pow_response(
-        request,
-        get_auth_headers,
-        choose_new_account,
-        login_deepseek_via_account,
-        DEEPSEEK_CREATE_POW_URL,
-        max_attempts,
-    )
+    return get_pow_response(request, max_attempts)
 
 
 def prepare_completion_request(
@@ -162,27 +156,7 @@ def prepare_completion_request(
     return call_completion_endpoint(payload, headers, max_attempts)
 
 
-def get_model_config(model: str) -> tuple[bool, bool]:
-    """根据模型名称获取配置
-    
-    Args:
-        model: 模型名称
-        
-    Returns:
-        (thinking_enabled, search_enabled) 元组
-    """
-    model_lower = model.lower()
-    
-    if model_lower in ["deepseek-v3", "deepseek-chat"]:
-        return False, False
-    elif model_lower in ["deepseek-r1", "deepseek-reasoner"]:
-        return True, False
-    elif model_lower in ["deepseek-v3-search", "deepseek-chat-search"]:
-        return False, True
-    elif model_lower in ["deepseek-r1-search", "deepseek-reasoner-search"]:
-        return True, True
-    else:
-        return None, None  # 不支持的模型
+# get_model_config 已移至 core.models
 
 
 def cleanup_account(request: Request):
